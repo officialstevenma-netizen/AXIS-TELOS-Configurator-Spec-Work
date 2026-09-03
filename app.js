@@ -38,9 +38,9 @@ const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
 const renderPass = new RenderPass(scene, camera);
 const ssaoPass = new SSAOPass(scene, camera, 1, 1);
-ssaoPass.kernelRadius = 5;
+ssaoPass.kernelRadius = 7;
 ssaoPass.minDistance = 0.002;
-ssaoPass.maxDistance = 0.075;
+ssaoPass.maxDistance = 0.10;
 ssaoPass.output = SSAOPass.OUTPUT.Default;
 const outputPass = new OutputPass();
 composer.addPass(renderPass);
@@ -144,6 +144,7 @@ const WALL_VARIANTS = {
 const DEFAULT_CAMERA_TARGET_OFFSET = new THREE.Vector3(0, -0.75, 0);
 const CAMERA_LOCAL_DIRECTION = new THREE.Vector3(1.0, 0.30, 1.0).normalize();
 const cameraTargetOffset = DEFAULT_CAMERA_TARGET_OFFSET.clone();
+const REPEATED_SCALE_THRESHOLD = 0.025;
 
 let selectedFloor = "smoked-walnut";
 let selectedWall = "soft-concrete";
@@ -156,20 +157,11 @@ let autoCenterDuringTransition = false;
 let floorMaterial = null;
 let wallMaterial = null;
 let carpetMaterial = null;
-let wallInstances = null;
-let crossInstances = null;
-let wallInstanceData = [];
-let crossInstanceData = [];
-let fallbackRepeatedMeshes = [];
+let repeatedParts = [];
 let furnitureFadeTargets = [];
 let cameraResetTween = null;
 
 const materialTweens = new Map();
-const tempMatrix = new THREE.Matrix4();
-const tempPosition = new THREE.Vector3();
-const tempQuaternion = new THREE.Quaternion();
-const tempScale = new THREE.Vector3();
-const tempScale2 = new THREE.Vector3();
 
 const THIN_NAME_HINTS = [
   "carpet", "rug", "curtain", "blind", "shade", "leaf", "leaves", "paper"
@@ -189,7 +181,6 @@ function cubicBezier(p1x, p1y, p2x, p2y) {
   const cy = 3 * p1y;
   const by = 3 * (p2y - p1y) - cy;
   const ay = 1 - cy - by;
-
   const sampleX = t => ((ax * t + bx) * t + cx) * t;
   const sampleY = t => ((ay * t + by) * t + cy) * t;
   const sampleDerivativeX = t => (3 * ax * t + 2 * bx) * t + cx;
@@ -232,10 +223,14 @@ function isThinMesh(object) {
   return THIN_NAME_HINTS.some(hint => text.includes(hint));
 }
 
-function isFallbackRepeatedPart(object) {
-  return object.name.startsWith("Wall_Left_") ||
-    object.name.startsWith("Wall_Right_") ||
-    object.name.startsWith("Crossmember_");
+function repeatedPartRecord(object) {
+  let match = object.name.match(/^Wall_(?:Left|Right)_(\d+)$/);
+  if (match) return { object, type: "wall", index: Number(match[1]) };
+
+  match = object.name.match(/^Crossmember_(\d+)$/);
+  if (match) return { object, type: "cross", index: Number(match[1]) };
+
+  return null;
 }
 
 function isInsideContainer(object) {
@@ -259,31 +254,8 @@ function collectNamedMaterials(root) {
   return map;
 }
 
-function captureInstanceData(mesh, type) {
-  const records = [];
-  for (let i = 0; i < mesh.count; i++) {
-    mesh.getMatrixAt(i, tempMatrix);
-    tempMatrix.decompose(tempPosition, tempQuaternion, tempScale);
-    records.push({
-      position: tempPosition.clone(),
-      quaternion: tempQuaternion.clone(),
-      fullScale: new THREE.Vector3(
-        Math.abs(tempScale.x) > 0.00001 ? Math.abs(tempScale.x) : 1,
-        Math.abs(tempScale.y) > 0.00001 ? Math.abs(tempScale.y) : 1,
-        1
-      ),
-      localIndex: type === "wall" ? i % Math.max(1, Math.round(mesh.count / 2)) : i
-    });
-  }
-  return records;
-}
-
 function prepareModel(root) {
-  wallInstances = null;
-  crossInstances = null;
-  wallInstanceData = [];
-  crossInstanceData = [];
-  fallbackRepeatedMeshes = [];
+  repeatedParts = [];
 
   root.traverse(object => {
     if (object.name.startsWith("SOURCE_")) {
@@ -309,18 +281,11 @@ function prepareModel(root) {
     object.castShadow = !transparent;
     object.receiveShadow = true;
 
-    if (object.isInstancedMesh && object.name === "02_WALL_INSTANCES") {
-      wallInstances = object;
-      wallInstanceData = captureInstanceData(object, "wall");
-      object.castShadow = true;
-    } else if (object.isInstancedMesh && object.name === "04_CROSSMEMBER_INSTANCES") {
-      crossInstances = object;
-      crossInstanceData = captureInstanceData(object, "cross");
-      object.castShadow = true;
-    } else if (isFallbackRepeatedPart(object)) {
-      fallbackRepeatedMeshes.push(object);
-    }
+    const repeated = repeatedPartRecord(object);
+    if (repeated) repeatedParts.push(repeated);
   });
+
+  repeatedParts.sort((a, b) => a.index - b.index);
 }
 
 function smooth01(value) {
@@ -342,37 +307,19 @@ function interpolateStateValue(time, key) {
   return THREE.MathUtils.lerp(m[key], l[key], t);
 }
 
-function updateInstancedGrowth(mesh, data, targetCount) {
-  if (!mesh || data.length === 0) return;
-
-  for (let i = 0; i < data.length; i++) {
-    const record = data[i];
-    const growth = smooth01(targetCount - record.localIndex);
-    tempScale2.copy(record.fullScale);
-
-    if (growth <= 0.0005) tempScale2.set(0, 0, 0);
-    else tempScale2.z *= growth;
-
-    tempMatrix.compose(record.position, record.quaternion, tempScale2);
-    mesh.setMatrixAt(i, tempMatrix);
-  }
-
-  mesh.instanceMatrix.needsUpdate = true;
-}
-
 function updateRepeatedGeometry() {
   const wallCount = interpolateStateValue(currentTime, "wallCount");
   const crossCount = interpolateStateValue(currentTime, "crossCount");
-  updateInstancedGrowth(wallInstances, wallInstanceData, wallCount);
-  updateInstancedGrowth(crossInstances, crossInstanceData, crossCount);
 
-  for (const object of fallbackRepeatedMeshes) {
-    const sx = Math.abs(object.scale.x);
-    const sy = Math.abs(object.scale.y);
-    const sz = Math.abs(object.scale.z);
-    const visible = Math.min(sx, sy, sz) > 0.01;
-    object.visible = visible;
-    object.castShadow = visible;
+  for (const entry of repeatedParts) {
+    const expectedCount = entry.type === "wall" ? wallCount : crossCount;
+    const allowedByState = entry.index < Math.ceil(expectedCount - 1e-7);
+    const authoredScale = Math.abs(entry.object.scale.z);
+    const grownEnough = authoredScale > REPEATED_SCALE_THRESHOLD;
+    const visible = allowedByState && grownEnough;
+
+    entry.object.visible = visible;
+    entry.object.castShadow = visible;
   }
 }
 
@@ -423,11 +370,10 @@ function buildFurnitureFadeTargets(gltf) {
 
 function updateFurnitureFades() {
   for (const entry of furnitureFadeTargets) {
-    const controller = entry.controller;
     const scaleValue = Math.max(
-      Math.abs(controller.scale.x),
-      Math.abs(controller.scale.y),
-      Math.abs(controller.scale.z)
+      Math.abs(entry.controller.scale.x),
+      Math.abs(entry.controller.scale.y),
+      Math.abs(entry.controller.scale.z)
     );
 
     const opacity = smooth01((scaleValue - 0.015) / 0.20);
@@ -443,9 +389,11 @@ function updateFurnitureFades() {
 
 function seekAbsoluteTime(time) {
   if (!mixer) return;
+
   for (const { clip, action } of actions) {
     action.time = THREE.MathUtils.clamp(time, 0, clip.duration);
   }
+
   mixer.update(0);
   updateRepeatedGeometry();
   updateFurnitureFades();
@@ -463,7 +411,7 @@ function applyCarpetGrayscale(material) {
     );
   };
 
-  material.customProgramCacheKey = () => "telos-carpet-grayscale-v3";
+  material.customProgramCacheKey = () => "telos-carpet-grayscale-v4";
   material.color.set(0xffffff);
   material.needsUpdate = true;
   material.userData.telosGrayscaleApplied = true;
@@ -508,7 +456,6 @@ function updateMaterialTweens(now) {
     material.color.lerpColors(tween.startColor, tween.endColor, t);
     material.roughness = THREE.MathUtils.lerp(tween.startRoughness, tween.endRoughness, t);
     material.needsUpdate = true;
-
     if (raw >= 1) materialTweens.delete(material);
   }
 }
@@ -583,6 +530,7 @@ function cabinCentreAndSize() {
 function attachShadowToCabin() {
   const cabin = cabinCentreAndSize();
   if (!cabin) return;
+
   shadowCatcher.position.set(
     cabin.centre.x,
     cabin.bounds.min.y - 0.003,
@@ -602,7 +550,6 @@ function defaultCameraPose() {
   const direction = CAMERA_LOCAL_DIRECTION.clone().applyQuaternion(containerRotation);
   const target = cabin.centre.clone().add(DEFAULT_CAMERA_TARGET_OFFSET);
   const sphere = cabin.bounds.getBoundingSphere(new THREE.Sphere());
-
   const verticalFov = THREE.MathUtils.degToRad(camera.fov);
   const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
   const limitingFov = Math.min(verticalFov, horizontalFov);
@@ -703,7 +650,7 @@ resetViewButton?.addEventListener("click", startResetView);
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
-const MODEL_URL = `./telos.glb?model-rev=20260903-final-polish-v1`;
+const MODEL_URL = `./telos.glb?model-rev=20260903-latest-c9fea57`;
 
 loader.load(
   MODEL_URL,
@@ -737,6 +684,12 @@ loader.load(
 
     seekAbsoluteTime(STATES.small.time);
     fitCameraToCabin();
+
+    console.info("TELOS latest model loaded", {
+      clips: actions.length,
+      repeatedParts: repeatedParts.length,
+      sink: Boolean(model.getObjectByName("Sink"))
+    });
 
     status.textContent = `${actions.length} animation clips loaded`;
     setTimeout(() => { status.hidden = true; }, 900);
@@ -806,7 +759,6 @@ function render(now) {
   if (Math.abs(difference) > 0.0001) {
     const alpha = 1 - Math.exp(-4.2 * dt);
     currentTime += difference * alpha;
-
     if (Math.abs(targetTime - currentTime) < 0.01) currentTime = targetTime;
     seekAbsoluteTime(currentTime);
   } else {
