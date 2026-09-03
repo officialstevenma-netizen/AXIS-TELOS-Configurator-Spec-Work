@@ -35,16 +35,13 @@ scene.add(sun);
 
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(40, 40),
-  new THREE.MeshStandardMaterial({
-    color: 0xd8d8d3,
-    roughness: 0.95,
-    side: THREE.FrontSide
-  })
+  new THREE.MeshStandardMaterial({ color: 0xd8d8d3, roughness: 0.95, side: THREE.FrontSide })
 );
 ground.rotation.x = -Math.PI / 2;
 ground.position.z = -0.012;
 scene.add(ground);
 
+/* Blender timeline is exported in absolute seconds. */
 const STATES = {
   small:  { time: 3.333333283662797, length: 2.4 },
   medium: { time: 199.99999701976782, length: 4.2 },
@@ -58,36 +55,131 @@ let revealMeshes = [];
 let currentTime = STATES.small.time;
 let targetTime = STATES.small.time;
 
-function setFrontSide(material) {
-  if (!material) return;
-  material.side = THREE.FrontSide;
-  material.needsUpdate = true;
+const SOURCE_PREFIX = "SOURCE_";
+const THIN_NAME_HINTS = [
+  "carpet", "rug", "curtain", "blind", "shade", "fabric plane", "leaf", "leaves", "paper"
+];
+
+function textureLabel(texture) {
+  if (!texture) return "";
+  return String(texture.name || texture.source?.data?.name || "").toLowerCase();
+}
+
+function looksNormal(name) {
+  return /(^|[_ .-])(normal|norm|nor|bump)([_ .-]|$)/i.test(name);
+}
+
+function looksColour(name) {
+  return /(albedo|base.?color|base.?colour|diffuse|color|colour)/i.test(name);
+}
+
+function repairObviousTextureSwap(material) {
+  if (!material || !material.isMaterial) return false;
+
+  const mapName = textureLabel(material.map);
+  const normalName = textureLabel(material.normalMap);
+
+  /*
+    A few optimisation/export paths can leave a normal image in the colour slot.
+    Only swap when the names make the mistake unambiguous.
+  */
+  if (material.map && material.normalMap && looksNormal(mapName) && looksColour(normalName)) {
+    const oldMap = material.map;
+    material.map = material.normalMap;
+    material.normalMap = oldMap;
+    material.map.colorSpace = THREE.SRGBColorSpace;
+    material.normalMap.colorSpace = THREE.NoColorSpace;
+    material.needsUpdate = true;
+    return true;
+  }
+
+  if (material.map) material.map.colorSpace = THREE.SRGBColorSpace;
+  if (material.normalMap) material.normalMap.colorSpace = THREE.NoColorSpace;
+  return false;
+}
+
+function materialList(object) {
+  if (!object.material) return [];
+  return Array.isArray(object.material) ? object.material : [object.material];
+}
+
+function isThinMesh(object) {
+  const haystack = `${object.name} ${materialList(object).map(m => m?.name || "").join(" ")}`.toLowerCase();
+  return THIN_NAME_HINTS.some(hint => haystack.includes(hint));
+}
+
+function isRepeatedPart(object) {
+  return object.name.startsWith("Wall_Left_") ||
+    object.name.startsWith("Wall_Right_") ||
+    object.name.startsWith("Crossmember_");
 }
 
 function prepareModel(root) {
   revealMeshes = [];
+  const hiddenSources = [];
+  const repairedMaterials = [];
+  const materialDiagnostics = [];
 
+  /* Ensure normal exported furniture/groups are visible. */
   root.traverse(object => {
-    if (!object.isMesh) return;
-
-    if (Array.isArray(object.material)) {
-      object.material.forEach(setFrontSide);
-    } else {
-      setFrontSide(object.material);
+    if (object.name.startsWith(SOURCE_PREFIX)) {
+      object.visible = false;
+      hiddenSources.push(object.name);
+      return;
     }
 
-    const repeated =
-      object.name.startsWith("Wall_Left_") ||
-      object.name.startsWith("Wall_Right_") ||
-      object.name.startsWith("Crossmember_");
+    object.visible = true;
 
-    if (repeated) revealMeshes.push(object);
+    if (!object.isMesh) return;
+
+    const thin = isThinMesh(object);
+
+    for (const material of materialList(object)) {
+      if (!material) continue;
+
+      material.side = thin ? THREE.DoubleSide : THREE.FrontSide;
+
+      if (repairObviousTextureSwap(material)) {
+        repairedMaterials.push(`${object.name} / ${material.name}`);
+      }
+
+      material.needsUpdate = true;
+
+      materialDiagnostics.push({
+        object: object.name,
+        material: material.name,
+        side: thin ? "DoubleSide" : "FrontSide",
+        map: textureLabel(material.map),
+        normalMap: textureLabel(material.normalMap)
+      });
+    }
+
+    if (isRepeatedPart(object)) revealMeshes.push(object);
   });
+
+  console.info("TELOS model preparation", {
+    hiddenSources,
+    revealMeshCount: revealMeshes.length,
+    repairedMaterials,
+    materials: materialDiagnostics
+  });
+}
+
+function updateRevealVisibility() {
+  for (const object of revealMeshes) {
+    /* Collapsed Blender state is around 0.001. */
+    object.visible = object.scale.y > 0.015;
+  }
 }
 
 function seekAbsoluteTime(time) {
   if (!mixer) return;
 
+  /*
+    Each Blender action contains key times on the same absolute timeline.
+    We therefore feed every action the same absolute time. Short actions clamp
+    at their final authored state, so furniture stays where Blender left it.
+  */
   for (const { clip, action } of actions) {
     action.time = THREE.MathUtils.clamp(time, 0, clip.duration);
   }
@@ -96,13 +188,8 @@ function seekAbsoluteTime(time) {
   updateRevealVisibility();
 }
 
-function updateRevealVisibility() {
-  for (const object of revealMeshes) {
-    object.visible = object.scale.y > 0.015;
-  }
-}
-
 function fitCamera(root) {
+  /* Fit after Small state has been evaluated, so collapsed future parts do not skew framing. */
   const bounds = new THREE.Box3().setFromObject(root);
   const centre = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
@@ -119,49 +206,51 @@ function fitCamera(root) {
   camera.updateProjectionMatrix();
 }
 
-/*
-  Keep the loader deliberately boring.
-  Stock GLTFLoader already handles normal PNG/JPEG images and built in WebP.
-  Meshopt is attached so the compressed web export still works when present.
-
-  The query string is intentional. It forces the browser and Python's local
-  server to fetch the current telos.glb instead of reusing an older 304 cached
-  copy while we swap model files during development.
-*/
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
 
-const MODEL_URL = `./telos.glb?model-rev=20260903-1635`;
+/* Cache bust during local iteration. */
+const MODEL_URL = `./telos.glb?model-rev=20260903-issues-pass-1`;
 
 loader.load(
   MODEL_URL,
   gltf => {
     model = gltf.scene;
     scene.add(model);
-    prepareModel(model);
-    fitCamera(model);
 
     mixer = new THREE.AnimationMixer(model);
     actions = gltf.animations.map(clip => {
       const action = mixer.clipAction(clip);
       action.play();
       action.paused = true;
+      action.enabled = true;
       action.clampWhenFinished = true;
+      action.setEffectiveWeight(1);
       return { clip, action };
     });
 
+    prepareModel(model);
     seekAbsoluteTime(STATES.small.time);
+    fitCamera(model);
 
-    status.textContent = `${actions.length} animation clips loaded`;
-    setTimeout(() => { status.hidden = true; }, 1600);
+    const meshNames = [];
+    model.traverse(object => {
+      if (object.isMesh && !object.name.startsWith(SOURCE_PREFIX)) meshNames.push(object.name);
+    });
 
     console.info("TELOS GLB loaded", {
       url: MODEL_URL,
-      scenes: gltf.scenes.length,
-      animations: gltf.animations.length,
-      revealMeshes: revealMeshes.length,
+      scene: gltf.scene?.name,
+      scenes: gltf.scenes.map(s => s.name),
+      animationCount: gltf.animations.length,
+      animationNames: gltf.animations.map(a => a.name),
+      meshCount: meshNames.length,
+      meshNames,
       resolvedStates: STATES
     });
+
+    status.textContent = `${actions.length} animation clips loaded`;
+    setTimeout(() => { status.hidden = true; }, 1200);
   },
   progress => {
     if (!progress.total) return;
@@ -210,10 +299,7 @@ function render(now) {
     const alpha = 1 - Math.exp(-4.2 * dt);
     currentTime += difference * alpha;
 
-    if (Math.abs(targetTime - currentTime) < 0.01) {
-      currentTime = targetTime;
-    }
-
+    if (Math.abs(targetTime - currentTime) < 0.01) currentTime = targetTime;
     seekAbsoluteTime(currentTime);
   }
 
