@@ -114,18 +114,114 @@ button { font: inherit; }
   touch-action: none;
 }
 
+/* The app still writes loader diagnostics here. Keep it available to assistive
+   tech and the loading overlay while removing the old floating status chip. */
 .status {
   position: absolute;
-  z-index: 2;
-  top: 20px;
-  left: 24px;
-  padding: 9px 12px;
-  background: rgba(255,255,255,.9);
-  border: 1px solid rgba(0,0,0,.08);
-  border-radius: var(--radius);
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.loading-overlay {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 68% 32%, rgba(255,247,226,.42), transparent 34%),
+    linear-gradient(180deg, rgba(210,220,228,.97), rgba(236,233,226,.97));
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 520ms cubic-bezier(.4,0,.2,1), visibility 520ms step-end;
+}
+
+.loading-overlay[hidden] { display: none; }
+.loading-overlay.is-complete {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-card {
+  width: min(430px, 100%);
+  padding: 28px 30px 26px;
+  background: rgba(255,255,255,.82);
+  border: 1px solid rgba(17,17,17,.10);
+  box-shadow: 0 18px 55px rgba(35,40,44,.10);
+  backdrop-filter: blur(18px);
+}
+
+.loading-eyebrow {
+  margin-bottom: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .17em;
+  color: rgba(23,23,23,.52);
+}
+
+.loading-title {
+  margin-bottom: 28px;
+  font-size: 24px;
+  line-height: 1.08;
+  font-weight: 500;
+  letter-spacing: -.025em;
+}
+
+.loading-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
   font-size: 11px;
-  color: #555;
-  backdrop-filter: blur(8px);
+  color: rgba(23,23,23,.63);
+}
+
+#loading-percent {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: rgba(23,23,23,.88);
+}
+
+.loading-track {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(17,17,17,.13);
+}
+
+.loading-fill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: var(--black);
+  will-change: transform;
+}
+
+.loading-note {
+  margin-top: 13px;
+  max-width: 320px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgba(23,23,23,.45);
+}
+
+.loading-overlay.is-error .loading-card {
+  border-color: rgba(134,42,42,.28);
+}
+
+.loading-overlay.is-error .loading-fill {
+  background: #7f2f2f;
 }
 
 .viewer-help {
@@ -337,6 +433,11 @@ h1 {
     min-height: 0;
   }
 
+  .loading-overlay { padding: 20px; }
+  .loading-card { padding: 22px 22px 20px; }
+  .loading-title { margin-bottom: 22px; font-size: 21px; }
+  .loading-note { max-width: 280px; }
+
   .panel {
     min-width: 0;
     min-height: 0;
@@ -350,7 +451,6 @@ h1 {
   .intro { margin-bottom: 24px; }
   .control-section { padding: 20px 0; }
   .viewer-help { left: 16px; bottom: 14px; font-size: 11px; }
-  .status { top: 14px; left: 16px; }
 }
 
 /* Very narrow phones: one finish per row, larger touch targets. */
