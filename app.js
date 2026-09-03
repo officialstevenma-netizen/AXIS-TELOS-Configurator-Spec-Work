@@ -119,17 +119,55 @@ function fitCamera(root) {
 
 const loader = new GLTFLoader();
 
-// Support the common compression paths used by glTF optimisation tools.
-loader.setMeshoptDecoder(MeshoptDecoder);
-
 const dracoLoader = new DRACOLoader();
 dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/draco/");
 loader.setDRACOLoader(dracoLoader);
+loader.setMeshoptDecoder(MeshoptDecoder);
 
 const ktx2Loader = new KTX2Loader();
 ktx2Loader.setTranscoderPath("https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/basis/");
 ktx2Loader.detectSupport(renderer);
 loader.setKTX2Loader(ktx2Loader);
+
+/*
+  Some glTF optimisation pipelines store the image source only inside a texture
+  extension. If the base texture.source field is omitted and the extension is
+  not claimed by the loader for any reason, GLTFLoader eventually receives an
+  undefined source index and throws the sourceDef/uri error seen in Firefox.
+
+  This fallback claims any texture that has no base source but does expose a
+  valid extension source. WebP and AVIF can then be loaded by the browser's
+  normal texture loader. KTX2 remains handled by Three's built in KTX2 plugin.
+*/
+loader.register(parser => ({
+  name: "TELOS_texture_source_fallback",
+
+  loadTexture(textureIndex) {
+    const textureDef = parser.json.textures?.[textureIndex];
+    if (!textureDef || textureDef.source !== undefined) return null;
+
+    const extensions = textureDef.extensions || {};
+
+    for (const extensionName of ["EXT_texture_webp", "EXT_texture_avif"]) {
+      const sourceIndex = extensions[extensionName]?.source;
+      if (sourceIndex === undefined) continue;
+
+      const sourceDef = parser.json.images?.[sourceIndex];
+      if (!sourceDef) {
+        console.warn("TELOS texture fallback found invalid source", {
+          textureIndex,
+          extensionName,
+          sourceIndex
+        });
+        continue;
+      }
+
+      return parser.loadTextureImage(textureIndex, sourceIndex, parser.textureLoader);
+    }
+
+    return null;
+  }
+}));
 
 loader.load(
   "./telos.glb",
@@ -161,18 +199,15 @@ loader.load(
     });
   },
   progress => {
-    if (!progress.total) {
-      status.textContent = `Loading model ${Math.round(progress.loaded / 1024)} KB`;
-      return;
-    }
+    if (!progress.total) return;
     const percent = Math.round((progress.loaded / progress.total) * 100);
     status.textContent = `Loading model ${percent}%`;
   },
   error => {
     console.error("TELOS GLB load failed", error);
-    const message = error?.message || String(error) || "Unknown GLB error";
-    status.textContent = `GLB error: ${message}`;
+    const message = error?.message || String(error);
     status.hidden = false;
+    status.textContent = `GLB error: ${message}`;
   }
 );
 
@@ -183,7 +218,6 @@ buttons.forEach(button => {
 
     targetTime = state.time;
     specLength.textContent = `${state.length.toFixed(1)} m`;
-
     buttons.forEach(item => item.classList.toggle("active", item === button));
   });
 });
