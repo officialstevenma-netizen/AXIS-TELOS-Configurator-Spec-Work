@@ -41,7 +41,6 @@ ground.rotation.x = -Math.PI / 2;
 ground.position.z = -0.012;
 scene.add(ground);
 
-/* Blender timeline is exported in absolute seconds. */
 const STATES = {
   small:  { time: 3.333333283662797, length: 2.4 },
   medium: { time: 199.99999701976782, length: 4.2 },
@@ -57,12 +56,119 @@ let targetTime = STATES.small.time;
 
 const SOURCE_PREFIX = "SOURCE_";
 const THIN_NAME_HINTS = [
-  "carpet", "rug", "curtain", "blind", "shade", "fabric plane", "leaf", "leaves", "paper"
+  "carpet", "rug", "curtain", "blind", "shade", "leaf", "leaves", "paper"
 ];
 
-function textureLabel(texture) {
-  if (!texture) return "";
-  return String(texture.name || texture.source?.data?.name || "").toLowerCase();
+function materialList(object) {
+  if (!object.material) return [];
+  return Array.isArray(object.material) ? object.material : [object.material];
+}
+
+function isRepeatedPart(object) {
+  return object.name.startsWith("Wall_Left_") ||
+    object.name.startsWith("Wall_Right_") ||
+    object.name.startsWith("Crossmember_");
+}
+
+function isThinMesh(object) {
+  const names = `${object.name} ${materialList(object).map(m => m?.name || "").join(" ")}`.toLowerCase();
+  return THIN_NAME_HINTS.some(hint => names.includes(hint));
+}
+
+function trackTargetName(trackName) {
+  return trackName.replace(/\.(position|quaternion|scale|morphTargetInfluences)(\[\d+\])?$/, "");
+}
+
+function buildAnimationIndex(gltf) {
+  const animatedNodes = new Set();
+  const scaleControllers = new Set();
+
+  for (const clip of gltf.animations) {
+    for (const track of clip.tracks) {
+      const target = trackTargetName(track.name);
+      if (!target || target === track.name) continue;
+      animatedNodes.add(target);
+      if (/\.scale(\[\d+\])?$/.test(track.name)) scaleControllers.add(target);
+    }
+  }
+
+  return { animatedNodes, scaleControllers };
+}
+
+function nearlyZeroScale(object) {
+  return Math.max(Math.abs(object.scale.x), Math.abs(object.scale.y), Math.abs(object.scale.z)) < 0.01;
+}
+
+/*
+  Blender can export descendants of an Empty that is keyed to exactly zero scale
+  with zero local scale and a huge inverse parent offset. The controller's own
+  animation is valid, but the child rest transforms are no longer useful.
+
+  In this asset the affected furniture was authored with common origins, so the
+  mesh geometry already contains the component offsets. Restoring descendants to
+  unit scale and clearing only obviously corrupted large local offsets recreates
+  the intended assembly while leaving the Empty's 0 to 1 animation untouched.
+*/
+function repairZeroScaleControllerHierarchies(gltf) {
+  const { animatedNodes, scaleControllers } = buildAnimationIndex(gltf);
+  const repaired = [];
+
+  for (const controllerName of scaleControllers) {
+    const controller = model.getObjectByName(controllerName);
+    if (!controller || controller.children.length === 0) continue;
+    if (!nearlyZeroScale(controller)) continue;
+
+    controller.traverse(child => {
+      if (child === controller) return;
+      if (animatedNodes.has(child.name)) return;
+      if (!nearlyZeroScale(child)) return;
+
+      const before = {
+        position: child.position.toArray(),
+        scale: child.scale.toArray()
+      };
+
+      child.scale.set(1, 1, 1);
+
+      /* Broken parent inverse offsets in this GLB are 4 m, 16/32 m or 64 m. */
+      if (child.position.length() > 2.0) {
+        child.position.set(0, 0, 0);
+      }
+
+      child.updateMatrix();
+      child.updateMatrixWorld(true);
+
+      repaired.push({
+        controller: controllerName,
+        child: child.name,
+        before,
+        after: {
+          position: child.position.toArray(),
+          scale: child.scale.toArray()
+        }
+      });
+    });
+  }
+
+  console.info("TELOS repaired zero scale hierarchies", repaired);
+}
+
+function textureSourceIndex(json, textureIndex) {
+  const textureDef = json.textures?.[textureIndex];
+  if (!textureDef) return undefined;
+  if (textureDef.source !== undefined) return textureDef.source;
+
+  const extensions = textureDef.extensions || {};
+  return extensions.KHR_texture_basisu?.source ??
+    extensions.EXT_texture_webp?.source ??
+    extensions.EXT_texture_avif?.source;
+}
+
+function textureImageName(parser, textureIndex) {
+  if (textureIndex === undefined) return "";
+  const sourceIndex = textureSourceIndex(parser.json, textureIndex);
+  const imageDef = sourceIndex !== undefined ? parser.json.images?.[sourceIndex] : null;
+  return String(imageDef?.name || imageDef?.uri || "").toLowerCase();
 }
 
 function looksNormal(name) {
@@ -73,54 +179,90 @@ function looksColour(name) {
   return /(albedo|base.?color|base.?colour|diffuse|color|colour)/i.test(name);
 }
 
-function repairObviousTextureSwap(material) {
-  if (!material || !material.isMaterial) return false;
-
-  const mapName = textureLabel(material.map);
-  const normalName = textureLabel(material.normalMap);
-
-  /*
-    A few optimisation/export paths can leave a normal image in the colour slot.
-    Only swap when the names make the mistake unambiguous.
-  */
-  if (material.map && material.normalMap && looksNormal(mapName) && looksColour(normalName)) {
-    const oldMap = material.map;
-    material.map = material.normalMap;
-    material.normalMap = oldMap;
-    material.map.colorSpace = THREE.SRGBColorSpace;
-    material.normalMap.colorSpace = THREE.NoColorSpace;
-    material.needsUpdate = true;
-    return true;
-  }
-
-  if (material.map) material.map.colorSpace = THREE.SRGBColorSpace;
-  if (material.normalMap) material.normalMap.colorSpace = THREE.NoColorSpace;
-  return false;
+async function getTexture(parser, index, colorSpace) {
+  if (index === undefined) return null;
+  const texture = await parser.getDependency("texture", index);
+  if (!texture) return null;
+  texture.colorSpace = colorSpace;
+  texture.flipY = false;
+  texture.needsUpdate = true;
+  return texture;
 }
 
-function materialList(object) {
-  if (!object.material) return [];
-  return Array.isArray(object.material) ? object.material : [object.material];
-}
+/*
+  Restore texture slots from the actual glTF material definitions instead of
+  guessing from whatever Three.js material state happened to arrive. If an
+  optimisation pass ever swapped an obvious normal and albedo source, repair
+  that pair by inspecting the image names in the GLB JSON.
+*/
+async function restoreCanonicalMaterialTextures(gltf) {
+  const parser = gltf.parser;
+  const jobs = [];
+  const diagnostics = [];
+  const seen = new Set();
 
-function isThinMesh(object) {
-  const haystack = `${object.name} ${materialList(object).map(m => m?.name || "").join(" ")}`.toLowerCase();
-  return THIN_NAME_HINTS.some(hint => haystack.includes(hint));
-}
+  model.traverse(object => {
+    if (!object.isMesh) return;
 
-function isRepeatedPart(object) {
-  return object.name.startsWith("Wall_Left_") ||
-    object.name.startsWith("Wall_Right_") ||
-    object.name.startsWith("Crossmember_");
+    for (const material of materialList(object)) {
+      if (!material || seen.has(material)) continue;
+      seen.add(material);
+
+      jobs.push((async () => {
+        const association = parser.associations?.get(material);
+        const materialIndex = association?.materials;
+        const materialDef = materialIndex !== undefined ? parser.json.materials?.[materialIndex] : null;
+        if (!materialDef) return;
+
+        const pbr = materialDef.pbrMetallicRoughness || {};
+        let baseIndex = pbr.baseColorTexture?.index;
+        let normalIndex = materialDef.normalTexture?.index;
+
+        const baseName = textureImageName(parser, baseIndex);
+        const normalName = textureImageName(parser, normalIndex);
+
+        if (baseIndex !== undefined && normalIndex !== undefined && looksNormal(baseName) && looksColour(normalName)) {
+          [baseIndex, normalIndex] = [normalIndex, baseIndex];
+        }
+
+        const [baseMap, normalMap, metalRoughMap, aoMap, emissiveMap] = await Promise.all([
+          getTexture(parser, baseIndex, THREE.SRGBColorSpace),
+          getTexture(parser, normalIndex, THREE.NoColorSpace),
+          getTexture(parser, pbr.metallicRoughnessTexture?.index, THREE.NoColorSpace),
+          getTexture(parser, materialDef.occlusionTexture?.index, THREE.NoColorSpace),
+          getTexture(parser, materialDef.emissiveTexture?.index, THREE.SRGBColorSpace)
+        ]);
+
+        if (baseIndex !== undefined) material.map = baseMap;
+        if (normalIndex !== undefined) material.normalMap = normalMap;
+        if (pbr.metallicRoughnessTexture?.index !== undefined) {
+          material.metalnessMap = metalRoughMap;
+          material.roughnessMap = metalRoughMap;
+        }
+        if (materialDef.occlusionTexture?.index !== undefined) material.aoMap = aoMap;
+        if (materialDef.emissiveTexture?.index !== undefined) material.emissiveMap = emissiveMap;
+
+        material.needsUpdate = true;
+
+        diagnostics.push({
+          material: material.name,
+          materialIndex,
+          baseImage: textureImageName(parser, baseIndex),
+          normalImage: textureImageName(parser, normalIndex),
+          metalRoughImage: textureImageName(parser, pbr.metallicRoughnessTexture?.index)
+        });
+      })());
+    }
+  });
+
+  await Promise.all(jobs);
+  console.info("TELOS canonical material textures", diagnostics);
 }
 
 function prepareModel(root) {
   revealMeshes = [];
   const hiddenSources = [];
-  const repairedMaterials = [];
-  const materialDiagnostics = [];
 
-  /* Ensure normal exported furniture/groups are visible. */
   root.traverse(object => {
     if (object.name.startsWith(SOURCE_PREFIX)) {
       object.visible = false;
@@ -129,45 +271,23 @@ function prepareModel(root) {
     }
 
     object.visible = true;
-
     if (!object.isMesh) return;
 
     const thin = isThinMesh(object);
-
     for (const material of materialList(object)) {
       if (!material) continue;
-
       material.side = thin ? THREE.DoubleSide : THREE.FrontSide;
-
-      if (repairObviousTextureSwap(material)) {
-        repairedMaterials.push(`${object.name} / ${material.name}`);
-      }
-
       material.needsUpdate = true;
-
-      materialDiagnostics.push({
-        object: object.name,
-        material: material.name,
-        side: thin ? "DoubleSide" : "FrontSide",
-        map: textureLabel(material.map),
-        normalMap: textureLabel(material.normalMap)
-      });
     }
 
     if (isRepeatedPart(object)) revealMeshes.push(object);
   });
 
-  console.info("TELOS model preparation", {
-    hiddenSources,
-    revealMeshCount: revealMeshes.length,
-    repairedMaterials,
-    materials: materialDiagnostics
-  });
+  console.info("TELOS hidden source meshes", hiddenSources);
 }
 
 function updateRevealVisibility() {
   for (const object of revealMeshes) {
-    /* Collapsed Blender state is around 0.001. */
     object.visible = object.scale.y > 0.015;
   }
 }
@@ -175,11 +295,6 @@ function updateRevealVisibility() {
 function seekAbsoluteTime(time) {
   if (!mixer) return;
 
-  /*
-    Each Blender action contains key times on the same absolute timeline.
-    We therefore feed every action the same absolute time. Short actions clamp
-    at their final authored state, so furniture stays where Blender left it.
-  */
   for (const { clip, action } of actions) {
     action.time = THREE.MathUtils.clamp(time, 0, clip.duration);
   }
@@ -189,7 +304,6 @@ function seekAbsoluteTime(time) {
 }
 
 function fitCamera(root) {
-  /* Fit after Small state has been evaluated, so collapsed future parts do not skew framing. */
   const bounds = new THREE.Box3().setFromObject(root);
   const centre = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
@@ -209,14 +323,21 @@ function fitCamera(root) {
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
 
-/* Cache bust during local iteration. */
-const MODEL_URL = `./telos.glb?model-rev=20260903-issues-pass-1`;
+const MODEL_URL = `./telos.glb?model-rev=20260903-hierarchy-texture-repair`;
 
 loader.load(
   MODEL_URL,
-  gltf => {
+  async gltf => {
     model = gltf.scene;
     scene.add(model);
+
+    /* Repair exporter damage before animation playback. */
+    repairZeroScaleControllerHierarchies(gltf);
+
+    /* Rebind PBR texture slots from the GLB's canonical material definitions. */
+    await restoreCanonicalMaterialTextures(gltf);
+
+    prepareModel(model);
 
     mixer = new THREE.AnimationMixer(model);
     actions = gltf.animations.map(clip => {
@@ -229,23 +350,14 @@ loader.load(
       return { clip, action };
     });
 
-    prepareModel(model);
     seekAbsoluteTime(STATES.small.time);
     fitCamera(model);
-
-    const meshNames = [];
-    model.traverse(object => {
-      if (object.isMesh && !object.name.startsWith(SOURCE_PREFIX)) meshNames.push(object.name);
-    });
 
     console.info("TELOS GLB loaded", {
       url: MODEL_URL,
       scene: gltf.scene?.name,
       scenes: gltf.scenes.map(s => s.name),
-      animationCount: gltf.animations.length,
-      animationNames: gltf.animations.map(a => a.name),
-      meshCount: meshNames.length,
-      meshNames,
+      animations: gltf.animations.map(a => a.name),
       resolvedStates: STATES
     });
 
