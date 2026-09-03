@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <title>TELOS Configurator Prototype</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <img class="telos-logo" src="./telos-logo.svg" alt="TELOS">
+    <span class="header-label">Product Configurator</span>
+  </header>
+
+  <main class="layout">
+    <section id="viewport" class="viewport" aria-label="Interactive 3D product view">
+      <div id="status" class="status" aria-live="polite">Loading model…</div>
+      <div class="viewer-help">Drag to orbit · Scroll to zoom</div>
+    </section>
+
+    <aside class="panel">
+      <div class="eyebrow">TELOS</div>
+      <h1>Configure your space</h1>
+      <p class="intro">Choose a size to preview the resolved container and furniture arrangement.</p>
+
+      <section class="control-section">
+        <h2>Size</h2>
+        <div class="size-grid" role="group" aria-label="Container size">
+          <button class="size-button active" data-size="small" type="button">
+            <span class="size-name">S</span>
+            <span class="size-dim">2.4 m</span>
+          </button>
+          <button class="size-button" data-size="medium" type="button">
+            <span class="size-name">M</span>
+            <span class="size-dim">4.2 m</span>
+          </button>
+          <button class="size-button" data-size="large" type="button">
+            <span class="size-name">L</span>
+            <span class="size-dim">6.0 m</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="control-section specs">
+        <h2>Specifications</h2>
+        <div class="spec-row"><span>Length</span><strong id="spec-length">2.4 m</strong></div>
+        <div class="spec-row"><span>Width</span><strong>2.4 m</strong></div>
+        <div class="spec-row"><span>Height</span><strong>2.7 m</strong></div>
+      </section>
+
+      <button class="quote-button" type="button">Request a quote</button>
+    </aside>
+  </main>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
