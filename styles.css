@@ -1,0 +1,59 @@
+:root {
+  --bg: #f4f4f1;
+  --surface: #ffffff;
+  --text: #171717;
+  --muted: #73736d;
+  --border: #d8d8d2;
+  --black: #111111;
+  --radius: 4px;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; background: var(--bg); color: var(--text); }
+body { min-height: 100vh; display: grid; grid-template-rows: 72px 1fr; overflow: hidden; }
+button { font: inherit; }
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 28px;
+  background: var(--black);
+  color: #fff;
+  border-bottom: 1px solid #2b2b2b;
+}
+
+.telos-logo { width: 148px; max-height: 40px; object-fit: contain; filter: invert(1); }
+.header-label { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; opacity: .66; }
+
+.layout { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
+.viewport { position: relative; min-width: 0; min-height: 0; background: linear-gradient(#efefec, #deded8); }
+.viewport canvas { display: block; width: 100%; height: 100%; }
+.status { position: absolute; z-index: 2; top: 20px; left: 24px; padding: 9px 12px; background: rgba(255,255,255,.9); border: 1px solid rgba(0,0,0,.08); border-radius: var(--radius); font-size: 11px; color: #555; backdrop-filter: blur(8px); }
+.viewer-help { position: absolute; left: 24px; bottom: 22px; font-size: 12px; color: #595953; pointer-events: none; }
+
+.panel { background: var(--surface); border-left: 1px solid var(--border); padding: 28px; overflow-y: auto; }
+.eyebrow { margin-bottom: 8px; font-size: 10px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); }
+h1 { margin: 0 0 8px; font-size: 26px; line-height: 1.1; font-weight: 500; letter-spacing: -.03em; }
+.intro { margin: 0 0 32px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.control-section { padding: 24px 0; border-top: 1px solid var(--border); }
+.control-section h2 { margin: 0 0 14px; font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+.size-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.size-button { min-height: 64px; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: background 140ms ease, color 140ms ease, border-color 140ms ease; }
+.size-button:hover { border-color: #999992; }
+.size-button:focus-visible { outline: 2px solid #5a5a56; outline-offset: 2px; }
+.size-button.active { background: var(--black); border-color: var(--black); color: #fff; }
+.size-name { font-size: 15px; font-weight: 600; }
+.size-dim { margin-top: 5px; font-size: 10px; opacity: .65; }
+.spec-row { display: flex; justify-content: space-between; gap: 20px; padding: 7px 0; font-size: 12px; }
+.spec-row span:first-child { color: var(--muted); }
+.quote-button { width: 100%; min-height: 48px; margin-top: 24px; border: 0; border-radius: var(--radius); background: var(--black); color: #fff; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
+
+@media (max-width: 800px) {
+  body { overflow: auto; }
+  .layout { grid-template-columns: 1fr; }
+  .viewport { min-height: 58vh; }
+  .panel { border-left: 0; border-top: 1px solid var(--border); }
+}
