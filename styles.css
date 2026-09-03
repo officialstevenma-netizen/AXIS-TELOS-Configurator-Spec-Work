@@ -26,7 +26,21 @@ button { font: inherit; }
 }
 
 .telos-logo { width: 148px; max-height: 40px; object-fit: contain; filter: invert(1); }
-.header-label { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; opacity: .66; }
+.reset-view {
+  appearance: none;
+  border: 0;
+  padding: 10px 0 10px 18px;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  opacity: .66;
+  cursor: pointer;
+  transition: opacity 160ms ease;
+}
+.reset-view:hover { opacity: 1; }
+.reset-view:focus-visible { outline: 1px solid rgba(255,255,255,.75); outline-offset: 4px; }
 
 .layout { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
 .viewport { position: relative; min-width: 0; min-height: 0; background: #dfe4e8; }
@@ -35,7 +49,6 @@ button { font: inherit; }
 .viewer-help { position: absolute; left: 24px; bottom: 22px; font-size: 12px; color: rgba(28,28,25,.68); pointer-events: none; }
 
 .panel { background: var(--surface); border-left: 1px solid var(--border); padding: 28px; overflow-y: auto; }
-.eyebrow { margin-bottom: 8px; font-size: 10px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--muted); }
 h1 { margin: 0 0 8px; font-size: 26px; line-height: 1.1; font-weight: 500; letter-spacing: -.03em; }
 .intro { margin: 0 0 32px; font-size: 13px; line-height: 1.5; color: var(--muted); }
 .control-section { padding: 24px 0; border-top: 1px solid var(--border); }
