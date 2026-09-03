@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
 const viewport = document.getElementById("viewport");
@@ -41,17 +43,6 @@ ground.rotation.x = -Math.PI / 2;
 ground.position.z = -0.012;
 scene.add(ground);
 
-/*
-  These times come from the actual exported GLB key timestamps.
-  The Blender scene's three clean product states land at approximately:
-
-  Small   frame 1   ->   3.333333 s
-  Medium  frame 60  -> 200.000000 s
-  Large   frame 120 -> 400.000000 s
-
-  We seek every exported action on ONE absolute timeline. This is important.
-  Normalising each clip to its own duration shifts furniture relative to the cage.
-*/
 const STATES = {
   small:  { time: 3.333333283662797, length: 2.4 },
   medium: { time: 199.99999701976782, length: 4.2 },
@@ -96,8 +87,7 @@ function seekAbsoluteTime(time) {
   if (!mixer) return;
 
   for (const { clip, action } of actions) {
-    const clipEnd = clip.duration;
-    action.time = THREE.MathUtils.clamp(time, 0, clipEnd);
+    action.time = THREE.MathUtils.clamp(time, 0, clip.duration);
   }
 
   mixer.update(0);
@@ -106,8 +96,7 @@ function seekAbsoluteTime(time) {
 
 function updateRevealVisibility() {
   for (const object of revealMeshes) {
-    const growth = object.scale.y;
-    object.visible = growth > 0.015;
+    object.visible = object.scale.y > 0.015;
   }
 }
 
@@ -129,7 +118,18 @@ function fitCamera(root) {
 }
 
 const loader = new GLTFLoader();
+
+// Support the common compression paths used by glTF optimisation tools.
 loader.setMeshoptDecoder(MeshoptDecoder);
+
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/draco/");
+loader.setDRACOLoader(dracoLoader);
+
+const ktx2Loader = new KTX2Loader();
+ktx2Loader.setTranscoderPath("https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/basis/");
+ktx2Loader.detectSupport(renderer);
+loader.setKTX2Loader(ktx2Loader);
 
 loader.load(
   "./telos.glb",
@@ -161,13 +161,18 @@ loader.load(
     });
   },
   progress => {
-    if (!progress.total) return;
+    if (!progress.total) {
+      status.textContent = `Loading model ${Math.round(progress.loaded / 1024)} KB`;
+      return;
+    }
     const percent = Math.round((progress.loaded / progress.total) * 100);
     status.textContent = `Loading model ${percent}%`;
   },
   error => {
     console.error("TELOS GLB load failed", error);
-    status.textContent = "Could not load telos.glb";
+    const message = error?.message || String(error) || "Unknown GLB error";
+    status.textContent = `GLB error: ${message}`;
+    status.hidden = false;
   }
 );
 
