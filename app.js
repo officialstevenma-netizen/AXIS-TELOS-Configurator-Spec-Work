@@ -3,17 +3,22 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 const viewport = document.getElementById("viewport");
 const status = document.getElementById("status");
 const specLength = document.getElementById("spec-length");
+const resetViewButton = document.getElementById("reset-view");
 const sizeButtons = [...document.querySelectorAll(".size-button")];
 const floorButtons = [...document.querySelectorAll("[data-floor]")];
 const wallButtons = [...document.querySelectorAll("[data-wall]")];
 
 const scene = new THREE.Scene();
-
 const camera = new THREE.PerspectiveCamera(34, 1, 0.05, 100);
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -28,6 +33,19 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.minDistance = 3.5;
 controls.maxDistance = 18;
+
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+const renderPass = new RenderPass(scene, camera);
+const ssaoPass = new SSAOPass(scene, camera, 1, 1);
+ssaoPass.kernelRadius = 5;
+ssaoPass.minDistance = 0.002;
+ssaoPass.maxDistance = 0.075;
+ssaoPass.output = SSAOPass.OUTPUT.Default;
+const outputPass = new OutputPass();
+composer.addPass(renderPass);
+composer.addPass(ssaoPass);
+composer.addPass(outputPass);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 const roomEnvironment = new RoomEnvironment();
@@ -123,27 +141,30 @@ const WALL_VARIANTS = {
   "sage-mineral":   { color: 0xa3ac9d, roughness: 0.69 }
 };
 
+const DEFAULT_CAMERA_TARGET_OFFSET = new THREE.Vector3(0, -0.75, 0);
+const CAMERA_LOCAL_DIRECTION = new THREE.Vector3(1.0, 0.30, 1.0).normalize();
+const cameraTargetOffset = DEFAULT_CAMERA_TARGET_OFFSET.clone();
+
 let selectedFloor = "smoked-walnut";
 let selectedWall = "soft-concrete";
-
 let model = null;
 let mixer = null;
 let actions = [];
 let currentTime = STATES.small.time;
 let targetTime = STATES.small.time;
 let autoCenterDuringTransition = false;
-
 let floorMaterial = null;
 let wallMaterial = null;
 let carpetMaterial = null;
-
 let wallInstances = null;
 let crossInstances = null;
 let wallInstanceData = [];
 let crossInstanceData = [];
 let fallbackRepeatedMeshes = [];
 let furnitureFadeTargets = [];
+let cameraResetTween = null;
 
+const materialTweens = new Map();
 const tempMatrix = new THREE.Matrix4();
 const tempPosition = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
@@ -160,6 +181,46 @@ const CABIN_MESH_NAMES = new Set([
   "Rail_Bottom_Left", "Rail_Bottom_Right", "Rail_Top_Left", "Rail_Top_Right",
   "Far_End_Wall", "Moving_End_Wall", "Floor", "Roof"
 ]);
+
+function cubicBezier(p1x, p1y, p2x, p2y) {
+  const cx = 3 * p1x;
+  const bx = 3 * (p2x - p1x) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 3 * p1y;
+  const by = 3 * (p2y - p1y) - cy;
+  const ay = 1 - cy - by;
+
+  const sampleX = t => ((ax * t + bx) * t + cx) * t;
+  const sampleY = t => ((ay * t + by) * t + cy) * t;
+  const sampleDerivativeX = t => (3 * ax * t + 2 * bx) * t + cx;
+
+  function solveX(x) {
+    let t = x;
+    for (let i = 0; i < 8; i++) {
+      const error = sampleX(t) - x;
+      const derivative = sampleDerivativeX(t);
+      if (Math.abs(error) < 1e-6) return t;
+      if (Math.abs(derivative) < 1e-6) break;
+      t -= error / derivative;
+    }
+
+    let lo = 0;
+    let hi = 1;
+    t = x;
+    for (let i = 0; i < 12; i++) {
+      const value = sampleX(t);
+      if (Math.abs(value - x) < 1e-6) break;
+      if (value < x) lo = t;
+      else hi = t;
+      t = (lo + hi) * 0.5;
+    }
+    return t;
+  }
+
+  return x => sampleY(solveX(THREE.MathUtils.clamp(x, 0, 1)));
+}
+
+const polishEase = cubicBezier(0.4, 0.0, 0.2, 1.0);
 
 function materialList(object) {
   if (!object.material) return [];
@@ -203,7 +264,6 @@ function captureInstanceData(mesh, type) {
   for (let i = 0; i < mesh.count; i++) {
     mesh.getMatrixAt(i, tempMatrix);
     tempMatrix.decompose(tempPosition, tempQuaternion, tempScale);
-
     records.push({
       position: tempPosition.clone(),
       quaternion: tempQuaternion.clone(),
@@ -288,13 +348,10 @@ function updateInstancedGrowth(mesh, data, targetCount) {
   for (let i = 0; i < data.length; i++) {
     const record = data[i];
     const growth = smooth01(targetCount - record.localIndex);
-
     tempScale2.copy(record.fullScale);
-    if (growth <= 0.0005) {
-      tempScale2.set(0, 0, 0);
-    } else {
-      tempScale2.z *= growth;
-    }
+
+    if (growth <= 0.0005) tempScale2.set(0, 0, 0);
+    else tempScale2.z *= growth;
 
     tempMatrix.compose(record.position, record.quaternion, tempScale2);
     mesh.setMatrixAt(i, tempMatrix);
@@ -306,7 +363,6 @@ function updateInstancedGrowth(mesh, data, targetCount) {
 function updateRepeatedGeometry() {
   const wallCount = interpolateStateValue(currentTime, "wallCount");
   const crossCount = interpolateStateValue(currentTime, "crossCount");
-
   updateInstancedGrowth(wallInstances, wallInstanceData, wallCount);
   updateInstancedGrowth(crossInstances, crossInstanceData, crossCount);
 
@@ -332,11 +388,8 @@ function getScaleControllerNames(gltf) {
 }
 
 function cloneMaterialsForFade(object) {
-  if (Array.isArray(object.material)) {
-    object.material = object.material.map(material => material.clone());
-  } else if (object.material) {
-    object.material = object.material.clone();
-  }
+  if (Array.isArray(object.material)) object.material = object.material.map(material => material.clone());
+  else if (object.material) object.material = object.material.clone();
 
   for (const material of materialList(object)) {
     material.userData.telosBaseOpacity = material.opacity;
@@ -363,7 +416,6 @@ function buildFurnitureFadeTargets(gltf) {
     }
 
     if (!controller) return;
-
     cloneMaterialsForFade(object);
     furnitureFadeTargets.push({ object, controller });
   });
@@ -391,11 +443,9 @@ function updateFurnitureFades() {
 
 function seekAbsoluteTime(time) {
   if (!mixer) return;
-
   for (const { clip, action } of actions) {
     action.time = THREE.MathUtils.clamp(time, 0, clip.duration);
   }
-
   mixer.update(0);
   updateRepeatedGeometry();
   updateFurnitureFades();
@@ -403,8 +453,8 @@ function seekAbsoluteTime(time) {
 
 function applyCarpetGrayscale(material) {
   if (!material || material.userData.telosGrayscaleApplied) return;
-
   const previous = material.onBeforeCompile;
+
   material.onBeforeCompile = shader => {
     if (previous) previous(shader);
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -413,22 +463,19 @@ function applyCarpetGrayscale(material) {
     );
   };
 
-  material.customProgramCacheKey = () => "telos-carpet-grayscale-v2";
+  material.customProgramCacheKey = () => "telos-carpet-grayscale-v3";
   material.color.set(0xffffff);
   material.needsUpdate = true;
   material.userData.telosGrayscaleApplied = true;
 }
 
 function makeSofaWhite(root) {
+  const names = new Set(["Sofa_BackCushion", "Sofa_Base", "Sofa_Cushion"]);
   root.traverse(object => {
-    if (!object.isMesh) return;
-    if (!["Sofa_BackCushion", "Sofa_Base", "Sofa_Cushion"].includes(object.name)) return;
+    if (!object.isMesh || !names.has(object.name)) return;
 
-    const materials = materialList(object);
-    for (const material of materials) {
+    for (const material of materialList(object)) {
       if (!material) continue;
-
-      /* Keep the fabric normal and roughness response, discard the bad purple colour map. */
       material.map = null;
       material.color.setHex(0xf1f0ec);
       material.metalness = 0;
@@ -442,11 +489,34 @@ function makeSofaWhite(root) {
   });
 }
 
-function applyFloorVariant(key) {
+function beginMaterialTween(material, variant) {
+  if (!material || !variant) return;
+  materialTweens.set(material, {
+    start: performance.now(),
+    duration: 620,
+    startColor: material.color.clone(),
+    endColor: new THREE.Color(variant.color),
+    startRoughness: material.roughness,
+    endRoughness: variant.roughness
+  });
+}
+
+function updateMaterialTweens(now) {
+  for (const [material, tween] of materialTweens) {
+    const raw = THREE.MathUtils.clamp((now - tween.start) / tween.duration, 0, 1);
+    const t = polishEase(raw);
+    material.color.lerpColors(tween.startColor, tween.endColor, t);
+    material.roughness = THREE.MathUtils.lerp(tween.startRoughness, tween.endRoughness, t);
+    material.needsUpdate = true;
+
+    if (raw >= 1) materialTweens.delete(material);
+  }
+}
+
+function setFloorVariantImmediate(key) {
   selectedFloor = key;
   const variant = FLOOR_VARIANTS[key];
   if (!variant || !floorMaterial) return;
-
   floorMaterial.color.setHex(variant.color);
   floorMaterial.metalness = 0;
   floorMaterial.roughness = variant.roughness;
@@ -454,15 +524,31 @@ function applyFloorVariant(key) {
   floorMaterial.needsUpdate = true;
 }
 
-function applyWallVariant(key) {
+function applyFloorVariant(key) {
+  selectedFloor = key;
+  const variant = FLOOR_VARIANTS[key];
+  if (!variant || !floorMaterial) return;
+  floorMaterial.metalness = 0;
+  if (floorMaterial.normalScale) floorMaterial.normalScale.set(0.55, 0.55);
+  beginMaterialTween(floorMaterial, variant);
+}
+
+function setWallVariantImmediate(key) {
   selectedWall = key;
   const variant = WALL_VARIANTS[key];
   if (!variant || !wallMaterial) return;
-
   wallMaterial.color.setHex(variant.color);
   wallMaterial.metalness = 0;
   wallMaterial.roughness = variant.roughness;
   wallMaterial.needsUpdate = true;
+}
+
+function applyWallVariant(key) {
+  selectedWall = key;
+  const variant = WALL_VARIANTS[key];
+  if (!variant || !wallMaterial) return;
+  wallMaterial.metalness = 0;
+  beginMaterialTween(wallMaterial, variant);
 }
 
 function updateFinishButtons(buttons, attribute, selected) {
@@ -474,7 +560,6 @@ function updateFinishButtons(buttons, attribute, selected) {
 function computeCabinBounds() {
   const bounds = new THREE.Box3();
   bounds.makeEmpty();
-
   if (!model) return bounds;
 
   model.updateMatrixWorld(true);
@@ -482,14 +567,12 @@ function computeCabinBounds() {
     if (!object.isMesh || !CABIN_MESH_NAMES.has(object.name)) return;
     bounds.expandByObject(object, true);
   });
-
   return bounds;
 }
 
 function cabinCentreAndSize() {
   const bounds = computeCabinBounds();
   if (bounds.isEmpty()) return null;
-
   return {
     bounds,
     centre: bounds.getCenter(new THREE.Vector3()),
@@ -500,7 +583,6 @@ function cabinCentreAndSize() {
 function attachShadowToCabin() {
   const cabin = cabinCentreAndSize();
   if (!cabin) return;
-
   shadowCatcher.position.set(
     cabin.centre.x,
     cabin.bounds.min.y - 0.003,
@@ -508,25 +590,91 @@ function attachShadowToCabin() {
   );
 }
 
+function defaultCameraPose() {
+  const cabin = cabinCentreAndSize();
+  if (!cabin || !model) return null;
+
+  const containerRoot = model.getObjectByName("CONTAINER_MOCKUP");
+  if (!containerRoot) return null;
+
+  containerRoot.updateWorldMatrix(true, false);
+  const containerRotation = containerRoot.getWorldQuaternion(new THREE.Quaternion());
+  const direction = CAMERA_LOCAL_DIRECTION.clone().applyQuaternion(containerRotation);
+  const target = cabin.centre.clone().add(DEFAULT_CAMERA_TARGET_OFFSET);
+  const sphere = cabin.bounds.getBoundingSphere(new THREE.Sphere());
+
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+  const limitingFov = Math.min(verticalFov, horizontalFov);
+  const distance = sphere.radius / Math.sin(limitingFov / 2) * 1.25;
+  const position = target.clone().addScaledVector(direction, distance);
+
+  return { cabin, sphere, target, position, distance };
+}
+
 function fitCameraToCabin() {
+  const pose = defaultCameraPose();
+  if (!pose) return;
+
+  cameraTargetOffset.copy(DEFAULT_CAMERA_TARGET_OFFSET);
+  controls.target.copy(pose.target);
+  camera.position.copy(pose.position);
+  controls.minDistance = pose.sphere.radius * 1.1;
+  controls.maxDistance = pose.distance * 3;
+  camera.near = Math.max(pose.distance / 100, 0.03);
+  camera.far = pose.distance * 20;
+  camera.updateProjectionMatrix();
+  camera.lookAt(pose.target);
+  controls.update();
+  attachShadowToCabin();
+}
+
+function captureCameraTargetOffset() {
   const cabin = cabinCentreAndSize();
   if (!cabin) return;
+  cameraTargetOffset.copy(controls.target).sub(cabin.centre);
+}
 
-  const longest = Math.max(cabin.size.x, cabin.size.y, cabin.size.z);
-  controls.target.copy(cabin.centre);
+function startResetView() {
+  const pose = defaultCameraPose();
+  if (!pose) return;
 
-  camera.position.set(
-    cabin.centre.x + longest * 1.10,
-    cabin.centre.y + longest * 0.62,
-    cabin.centre.z + longest * 1.22
+  autoCenterDuringTransition = false;
+  cameraResetTween = {
+    start: performance.now(),
+    duration: 680,
+    startPosition: camera.position.clone(),
+    startTarget: controls.target.clone(),
+    endPosition: pose.position,
+    endTarget: pose.target
+  };
+}
+
+function updateResetView(now) {
+  if (!cameraResetTween) return;
+
+  const raw = THREE.MathUtils.clamp(
+    (now - cameraResetTween.start) / cameraResetTween.duration,
+    0,
+    1
+  );
+  const t = polishEase(raw);
+
+  camera.position.lerpVectors(
+    cameraResetTween.startPosition,
+    cameraResetTween.endPosition,
+    t
+  );
+  controls.target.lerpVectors(
+    cameraResetTween.startTarget,
+    cameraResetTween.endTarget,
+    t
   );
 
-  camera.near = Math.max(longest / 1000, 0.01);
-  camera.far = longest * 24;
-  camera.updateProjectionMatrix();
-  controls.update();
-
-  attachShadowToCabin();
+  if (raw >= 1) {
+    cameraTargetOffset.copy(DEFAULT_CAMERA_TARGET_OFFSET);
+    cameraResetTween = null;
+  }
 }
 
 function gentlyTrackCabinCentre() {
@@ -534,26 +682,34 @@ function gentlyTrackCabinCentre() {
   const cabin = cabinCentreAndSize();
   if (!cabin) return;
 
-  const delta = cabin.centre.clone().sub(controls.target).multiplyScalar(0.10);
+  const desiredTarget = cabin.centre.clone().add(cameraTargetOffset);
+  const delta = desiredTarget.clone().sub(controls.target).multiplyScalar(0.10);
   controls.target.add(delta);
   camera.position.add(delta);
 
   if (Math.abs(targetTime - currentTime) < 0.02) {
+    const finalDelta = desiredTarget.clone().sub(controls.target);
+    controls.target.add(finalDelta);
+    camera.position.add(finalDelta);
     autoCenterDuringTransition = false;
   }
 }
 
+controls.addEventListener("start", () => {
+  cameraResetTween = null;
+});
+controls.addEventListener("end", captureCameraTargetOffset);
+resetViewButton?.addEventListener("click", startResetView);
+
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
-
-const MODEL_URL = `./telos.glb?model-rev=20260903-aesthetics-v2`;
+const MODEL_URL = `./telos.glb?model-rev=20260903-final-polish-v1`;
 
 loader.load(
   MODEL_URL,
   async gltf => {
     model = gltf.scene;
     scene.add(model);
-
     prepareModel(model);
 
     mixer = new THREE.AnimationMixer(model);
@@ -576,23 +732,14 @@ loader.load(
 
     if (carpetMaterial) applyCarpetGrayscale(carpetMaterial);
     makeSofaWhite(model);
-    applyFloorVariant(selectedFloor);
-    applyWallVariant(selectedWall);
+    setFloorVariantImmediate(selectedFloor);
+    setWallVariantImmediate(selectedWall);
 
     seekAbsoluteTime(STATES.small.time);
     fitCameraToCabin();
 
-    console.info("TELOS presentation pass", {
-      wallInstances: wallInstances?.count || 0,
-      crossInstances: crossInstances?.count || 0,
-      furnitureFadeTargets: furnitureFadeTargets.length,
-      floorMaterial: floorMaterial?.name || null,
-      wallMaterial: wallMaterial?.name || null,
-      carpetMaterial: carpetMaterial?.name || null
-    });
-
     status.textContent = `${actions.length} animation clips loaded`;
-    setTimeout(() => { status.hidden = true; }, 1000);
+    setTimeout(() => { status.hidden = true; }, 900);
   },
   progress => {
     if (!progress.total) return;
@@ -612,6 +759,8 @@ sizeButtons.forEach(button => {
     const state = STATES[button.dataset.size];
     if (!state) return;
 
+    cameraResetTween = null;
+    captureCameraTargetOffset();
     targetTime = state.time;
     specLength.textContent = `${state.length.toFixed(1)} m`;
     autoCenterDuringTransition = true;
@@ -637,6 +786,7 @@ function resize() {
   const width = Math.max(1, viewport.clientWidth);
   const height = Math.max(1, viewport.clientHeight);
   renderer.setSize(width, height, false);
+  composer.setSize(width, height);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 }
@@ -657,21 +807,19 @@ function render(now) {
     const alpha = 1 - Math.exp(-4.2 * dt);
     currentTime += difference * alpha;
 
-    if (Math.abs(targetTime - currentTime) < 0.01) {
-      currentTime = targetTime;
-    }
-
+    if (Math.abs(targetTime - currentTime) < 0.01) currentTime = targetTime;
     seekAbsoluteTime(currentTime);
   } else {
-    /* Enforce hidden zero-scale repeated parts even while idle. */
     updateRepeatedGeometry();
     updateFurnitureFades();
   }
 
+  updateMaterialTweens(now);
   gentlyTrackCabinCentre();
+  updateResetView(now);
   attachShadowToCabin();
   controls.update();
-  renderer.render(scene, camera);
+  composer.render();
 }
 
 requestAnimationFrame(render);
