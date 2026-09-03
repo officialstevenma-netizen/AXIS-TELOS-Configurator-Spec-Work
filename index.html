@@ -2,24 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111111">
   <title>TELOS Configurator Prototype</title>
-  <link rel="stylesheet" href="./styles.css?v=final-polish-2">
+  <link rel="stylesheet" href="./styles.css?rev=20260903-mobile-v1">
 </head>
 <body>
   <header class="site-header">
     <img class="telos-logo" src="./telos-logo.svg" alt="TELOS">
-    <button id="reset-view" class="reset-view" type="button">Reset view</button>
+    <button id="reset-view" class="reset-view" type="button" aria-label="Reset 3D view">Reset view</button>
   </header>
 
   <main class="layout">
     <section id="viewport" class="viewport" aria-label="Interactive 3D product view">
       <div id="status" class="status" aria-live="polite">Loading model…</div>
-      <div class="viewer-help">Drag to orbit · Scroll to zoom</div>
+      <div class="viewer-help">Drag to orbit · Pinch or scroll to zoom</div>
     </section>
 
-    <aside class="panel">
+    <aside class="panel" aria-label="Configurator options">
       <h1>Configure your space</h1>
       <p class="intro">Choose a size, floor finish and rear wall treatment.</p>
 
@@ -28,15 +28,15 @@
         <div class="size-grid" role="group" aria-label="Container size">
           <button class="size-button active" data-size="small" type="button">
             <span class="size-name">S</span>
-            <span class="size-dim">2.4 m</span>
+            <span class="size-dim">2.4 × 2.4 m</span>
           </button>
           <button class="size-button" data-size="medium" type="button">
             <span class="size-name">M</span>
-            <span class="size-dim">4.2 m</span>
+            <span class="size-dim">4.2 × 2.4 m</span>
           </button>
           <button class="size-button" data-size="large" type="button">
             <span class="size-name">L</span>
-            <span class="size-dim">6.0 m</span>
+            <span class="size-dim">6.0 × 2.4 m</span>
           </button>
         </div>
       </section>
@@ -44,22 +44,22 @@
       <section class="control-section">
         <h2>Floor finish</h2>
         <div class="finish-grid" role="group" aria-label="Wood floor finish">
-          <button class="finish-button active" data-floor="smoked-walnut" type="button"><span class="swatch" style="--swatch:#6f4b32"></span><span>Smoked Walnut</span></button>
-          <button class="finish-button" data-floor="natural-oak" type="button"><span class="swatch" style="--swatch:#b88a5a"></span><span>Natural Oak</span></button>
-          <button class="finish-button" data-floor="honey-ash" type="button"><span class="swatch" style="--swatch:#c99655"></span><span>Honey Ash</span></button>
-          <button class="finish-button" data-floor="nordic-oak" type="button"><span class="swatch" style="--swatch:#d7c09b"></span><span>Nordic Oak</span></button>
-          <button class="finish-button" data-floor="blackened-timber" type="button"><span class="swatch" style="--swatch:#37322f"></span><span>Blackened Timber</span></button>
+          <button class="finish-button active" data-floor="smoked-walnut" type="button"><span class="swatch" style="--swatch:#6f4b32"></span><span class="finish-copy"><span>Smoked Walnut</span><small>Warm · Dark</small></span></button>
+          <button class="finish-button" data-floor="natural-oak" type="button"><span class="swatch" style="--swatch:#b88a5a"></span><span class="finish-copy"><span>Natural Oak</span><small>Natural · Mid</small></span></button>
+          <button class="finish-button" data-floor="honey-ash" type="button"><span class="swatch" style="--swatch:#c99655"></span><span class="finish-copy"><span>Honey Ash</span><small>Warm · Light</small></span></button>
+          <button class="finish-button" data-floor="nordic-oak" type="button"><span class="swatch" style="--swatch:#d7c09b"></span><span class="finish-copy"><span>Nordic Oak</span><small>Neutral · Light</small></span></button>
+          <button class="finish-button" data-floor="blackened-timber" type="button"><span class="swatch" style="--swatch:#37322f"></span><span class="finish-copy"><span>Blackened Timber</span><small>Cool · Dark</small></span></button>
         </div>
       </section>
 
       <section class="control-section">
         <h2>Rear wall</h2>
         <div class="finish-grid" role="group" aria-label="Rear wall colour">
-          <button class="finish-button" data-wall="gallery-white" type="button"><span class="swatch" style="--swatch:#f1efe9"></span><span>Gallery White</span></button>
-          <button class="finish-button" data-wall="warm-limestone" type="button"><span class="swatch" style="--swatch:#d6c2a3"></span><span>Warm Limestone</span></button>
-          <button class="finish-button active" data-wall="soft-concrete" type="button"><span class="swatch" style="--swatch:#b0aea8"></span><span>Soft Concrete</span></button>
-          <button class="finish-button" data-wall="graphite" type="button"><span class="swatch" style="--swatch:#5d5c59"></span><span>Graphite</span></button>
-          <button class="finish-button" data-wall="sage-mineral" type="button"><span class="swatch" style="--swatch:#a3ac9d"></span><span>Sage Mineral</span></button>
+          <button class="finish-button" data-wall="gallery-white" type="button"><span class="swatch" style="--swatch:#f1efe9"></span><span class="finish-copy"><span>Gallery White</span><small>Clean · Bright</small></span></button>
+          <button class="finish-button" data-wall="warm-limestone" type="button"><span class="swatch" style="--swatch:#d6c2a3"></span><span class="finish-copy"><span>Warm Limestone</span><small>Warm · Soft</small></span></button>
+          <button class="finish-button active" data-wall="soft-concrete" type="button"><span class="swatch" style="--swatch:#b0aea8"></span><span class="finish-copy"><span>Soft Concrete</span><small>Neutral · Mineral</small></span></button>
+          <button class="finish-button" data-wall="graphite" type="button"><span class="swatch" style="--swatch:#5d5c59"></span><span class="finish-copy"><span>Graphite</span><small>Cool · Dark</small></span></button>
+          <button class="finish-button" data-wall="sage-mineral" type="button"><span class="swatch" style="--swatch:#a3ac9d"></span><span class="finish-copy"><span>Sage Mineral</span><small>Muted · Green</small></span></button>
         </div>
       </section>
 
@@ -82,6 +82,6 @@
     }
   }
   </script>
-  <script type="module" src="./app.js?v=final-polish-2"></script>
+  <script type="module" src="./app.js?rev=20260903-mobile-v1"></script>
 </body>
 </html>
