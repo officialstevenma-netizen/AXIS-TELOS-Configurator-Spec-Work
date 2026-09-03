@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111111">
   <title>TELOS Configurator Prototype</title>
-  <link rel="stylesheet" href="./styles.css?rev=20260903-responsive-v2">
+  <link rel="stylesheet" href="./styles.css?rev=20260903-loader-v1">
 </head>
 <body>
   <header class="site-header">
@@ -15,7 +15,23 @@
 
   <main class="layout">
     <section id="viewport" class="viewport" aria-label="Interactive 3D product view">
-      <div id="status" class="status" aria-live="polite">Loading model…</div>
+      <div id="status" class="status" aria-live="polite">Loading model 0%</div>
+
+      <div id="loading-overlay" class="loading-overlay" aria-live="polite" aria-busy="true">
+        <div class="loading-card">
+          <div class="loading-eyebrow">TELOS CONFIGURATOR</div>
+          <div class="loading-title">Preparing your space</div>
+          <div class="loading-meta">
+            <span id="loading-stage">Downloading 3D scene</span>
+            <span id="loading-percent">0%</span>
+          </div>
+          <div class="loading-track" aria-hidden="true">
+            <div id="loading-fill" class="loading-fill"></div>
+          </div>
+          <div class="loading-note">High fidelity materials may take a moment on first load.</div>
+        </div>
+      </div>
+
       <div class="viewer-help">Drag to orbit · Pinch or scroll to zoom</div>
     </section>
 
@@ -82,6 +98,126 @@
     }
   }
   </script>
+
+  <script>
+  (() => {
+    const status = document.getElementById("status");
+    const overlay = document.getElementById("loading-overlay");
+    const stage = document.getElementById("loading-stage");
+    const percent = document.getElementById("loading-percent");
+    const fill = document.getElementById("loading-fill");
+
+    if (!status || !overlay || !stage || !percent || !fill) return;
+
+    const startedAt = performance.now();
+    let networkFinishedAt = null;
+    let visualProgress = 0;
+    let targetProgress = 0.015;
+    let preparing = false;
+    let finished = false;
+    let lastFrame = performance.now();
+
+    function setTarget(value) {
+      targetProgress = Math.max(targetProgress, Math.min(value, 0.985));
+    }
+
+    function completeLoading() {
+      if (finished) return;
+      finished = true;
+      preparing = false;
+      targetProgress = 1;
+      visualProgress = 1;
+      fill.style.transform = "scaleX(1)";
+      percent.textContent = "100%";
+      stage.textContent = "Ready";
+      overlay.setAttribute("aria-busy", "false");
+
+      const finishedAt = performance.now();
+      console.info("TELOS load timing", {
+        totalSeconds: ((finishedAt - startedAt) / 1000).toFixed(2),
+        downloadSeconds: networkFinishedAt ? ((networkFinishedAt - startedAt) / 1000).toFixed(2) : "unknown",
+        prepareSeconds: networkFinishedAt ? ((finishedAt - networkFinishedAt) / 1000).toFixed(2) : "unknown"
+      });
+
+      window.setTimeout(() => overlay.classList.add("is-complete"), 180);
+      window.setTimeout(() => { overlay.hidden = true; }, 760);
+    }
+
+    function updateFromStatus() {
+      const text = status.textContent || "";
+      const match = text.match(/Loading model\s+(\d+)%/i);
+
+      if (match) {
+        const raw = Math.max(0, Math.min(100, Number(match[1]))) / 100;
+
+        if (raw >= 0.995) {
+          if (!networkFinishedAt) networkFinishedAt = performance.now();
+          preparing = true;
+          setTarget(0.90);
+          stage.textContent = "Preparing materials";
+        } else {
+          preparing = false;
+          setTarget(0.02 + raw * 0.86);
+          stage.textContent = "Downloading 3D scene";
+        }
+        return;
+      }
+
+      if (/animation clips loaded/i.test(text)) {
+        stage.textContent = "Finalising scene";
+        targetProgress = 0.995;
+        return;
+      }
+
+      if (/GLB error/i.test(text)) {
+        finished = true;
+        preparing = false;
+        overlay.classList.add("is-error");
+        overlay.setAttribute("aria-busy", "false");
+        stage.textContent = "Unable to load 3D scene";
+        percent.textContent = "";
+      }
+    }
+
+    function tick(now) {
+      if (finished) return;
+
+      const dt = Math.min((now - lastFrame) / 1000, 0.1);
+      lastFrame = now;
+
+      if (preparing) {
+        const drift = 1 - Math.exp(-0.22 * dt);
+        targetProgress += (0.975 - targetProgress) * drift;
+      }
+
+      const smoothing = 1 - Math.exp(-7.5 * dt);
+      visualProgress += (targetProgress - visualProgress) * smoothing;
+      visualProgress = Math.min(visualProgress, 0.995);
+
+      fill.style.transform = `scaleX(${visualProgress})`;
+      percent.textContent = `${Math.round(visualProgress * 100)}%`;
+
+      requestAnimationFrame(tick);
+    }
+
+    const observer = new MutationObserver(() => {
+      updateFromStatus();
+      if (status.hidden) completeLoading();
+    });
+
+    observer.observe(status, {
+      attributes: true,
+      attributeFilter: ["hidden"],
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+
+    updateFromStatus();
+    requestAnimationFrame(tick);
+  })();
+  </script>
+
   <script type="module" src="./app.js?rev=20260903-latest-model-v2"></script>
 </body>
 </html>
