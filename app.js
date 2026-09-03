@@ -1,8 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
-import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
 const viewport = document.getElementById("viewport");
@@ -37,7 +35,11 @@ scene.add(sun);
 
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(40, 40),
-  new THREE.MeshStandardMaterial({ color: 0xd8d8d3, roughness: 0.95, side: THREE.FrontSide })
+  new THREE.MeshStandardMaterial({
+    color: 0xd8d8d3,
+    roughness: 0.95,
+    side: THREE.FrontSide
+  })
 );
 ground.rotation.x = -Math.PI / 2;
 ground.position.z = -0.012;
@@ -117,60 +119,22 @@ function fitCamera(root) {
   camera.updateProjectionMatrix();
 }
 
-const loader = new GLTFLoader();
+/*
+  Keep the loader deliberately boring.
+  Stock GLTFLoader already handles normal PNG/JPEG images and built in WebP.
+  Meshopt is attached so the compressed web export still works when present.
 
-const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/draco/");
-loader.setDRACOLoader(dracoLoader);
+  The query string is intentional. It forces the browser and Python's local
+  server to fetch the current telos.glb instead of reusing an older 304 cached
+  copy while we swap model files during development.
+*/
+const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
 
-const ktx2Loader = new KTX2Loader();
-ktx2Loader.setTranscoderPath("https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/basis/");
-ktx2Loader.detectSupport(renderer);
-loader.setKTX2Loader(ktx2Loader);
-
-/*
-  Some glTF optimisation pipelines store the image source only inside a texture
-  extension. If the base texture.source field is omitted and the extension is
-  not claimed by the loader for any reason, GLTFLoader eventually receives an
-  undefined source index and throws the sourceDef/uri error seen in Firefox.
-
-  This fallback claims any texture that has no base source but does expose a
-  valid extension source. WebP and AVIF can then be loaded by the browser's
-  normal texture loader. KTX2 remains handled by Three's built in KTX2 plugin.
-*/
-loader.register(parser => ({
-  name: "TELOS_texture_source_fallback",
-
-  loadTexture(textureIndex) {
-    const textureDef = parser.json.textures?.[textureIndex];
-    if (!textureDef || textureDef.source !== undefined) return null;
-
-    const extensions = textureDef.extensions || {};
-
-    for (const extensionName of ["EXT_texture_webp", "EXT_texture_avif"]) {
-      const sourceIndex = extensions[extensionName]?.source;
-      if (sourceIndex === undefined) continue;
-
-      const sourceDef = parser.json.images?.[sourceIndex];
-      if (!sourceDef) {
-        console.warn("TELOS texture fallback found invalid source", {
-          textureIndex,
-          extensionName,
-          sourceIndex
-        });
-        continue;
-      }
-
-      return parser.loadTextureImage(textureIndex, sourceIndex, parser.textureLoader);
-    }
-
-    return null;
-  }
-}));
+const MODEL_URL = `./telos.glb?model-rev=20260903-1635`;
 
 loader.load(
-  "./telos.glb",
+  MODEL_URL,
   gltf => {
     model = gltf.scene;
     scene.add(model);
@@ -192,6 +156,7 @@ loader.load(
     setTimeout(() => { status.hidden = true; }, 1600);
 
     console.info("TELOS GLB loaded", {
+      url: MODEL_URL,
       scenes: gltf.scenes.length,
       animations: gltf.animations.length,
       revealMeshes: revealMeshes.length,
