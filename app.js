@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
 const viewport = document.getElementById("viewport");
 const status = document.getElementById("status");
@@ -105,11 +106,6 @@ function seekAbsoluteTime(time) {
 
 function updateRevealVisibility() {
   for (const object of revealMeshes) {
-    /*
-      The Blender mockup uses scale.y ~= 0.001 as the collapsed state.
-      Hide that state completely so it cannot render as a thin black needle.
-      Geometry becomes visible only once it has grown enough to read as a panel.
-    */
     const growth = object.scale.y;
     object.visible = growth > 0.015;
   }
@@ -133,6 +129,8 @@ function fitCamera(root) {
 }
 
 const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+
 loader.load(
   "./telos.glb",
   gltf => {
@@ -168,7 +166,7 @@ loader.load(
     status.textContent = `Loading model ${percent}%`;
   },
   error => {
-    console.error(error);
+    console.error("TELOS GLB load failed", error);
     status.textContent = "Could not load telos.glb";
   }
 );
